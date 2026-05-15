@@ -1,0 +1,12 @@
+# 환경변수 파일
+.env
+
+# Python 캐시
+__pycache__/
+*.pyc
+
+# 모델 캐시
+.cache/
+
+# VSCode 설정
+.vscode/
