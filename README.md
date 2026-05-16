@@ -96,7 +96,8 @@ TOP5 + 키워드 5개 반환
 
 ## DB 연동
 - DB: PostgreSQL
-- 테이블: question_logs
+- 실제 질문 테이블: `chat_message` (`sender_type='USER'` 기준)
+- 질문 본문: `convert_from(lo_get(content), 'UTF8')`
 - 연결 실패시 가짜 데이터로 자동 대체
 
 ---
