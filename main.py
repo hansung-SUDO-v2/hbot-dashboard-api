@@ -6,11 +6,15 @@ from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from umap import UMAP
 from hdbscan import HDBSCAN
+from sklearn.feature_extraction.text import CountVectorizer
+from konlpy.tag import Okt
 from datetime import datetime, date
 from pydantic import BaseModel
 from typing import List
 from pathlib import Path
 import os
+import re
+import joblib
 import psycopg2
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -34,13 +38,16 @@ DB_CONFIG = {
 APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("APP_PORT", "8010"))
 
+CHECKPOINT_DIR = BASE_DIR / "checkpoints"
+TOPIC_MODEL_PATH = CHECKPOINT_DIR / "topic_model"
+METADATA_PATH = CHECKPOINT_DIR / "metadata.joblib"
+
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 # =====================
 # 3. DB에서 질문 가져오기
-# 실패하면 가짜 데이터 사용
 # =====================
 def get_questions_from_db():
     """
@@ -68,106 +75,42 @@ def get_questions_from_db():
 
     except Exception as e:
         print(f"DB 연결 실패: {e}")
-        print("가짜 데이터로 대신 실행할게요")
         return []
 
 # =====================
-# 4. 질문 데이터
-# DB 연결 실패시 가짜 데이터 사용
+# 4. 전처리
+# - 임베딩 입력: 가벼운 정제 (URL/자모/공백)
+# - c-TF-IDF 토큰: Okt 명사 추출 + 명사 불용어
 # =====================
-questions = get_questions_from_db()
+_JAMO_RE = re.compile(r"[ㄱ-ㅎㅏ-ㅣ]+")
+_URL_RE = re.compile(r"https?://\S+")
+_WS_RE = re.compile(r"\s+")
 
-if not questions:
-    questions = [
-        # 장학금 관련
-        "국가장학금 마감일 알려줘",
-        "장학금 서류 뭐 필요해",
-        "국장 2유형 얼마나 받아",
-        "장학금 입금 언제 돼",
-        "교내장학금 종류가 뭐야",
-        "장학금 신청 자격이 뭐야",
-        "국가장학금 1유형 2유형 차이",
-        "장학금 취소되면 환수돼",
-        "학점 몇 점이면 장학금 받아",
-        "장학금 신청 기간 지났어",
-        "장학금 서류 어디 내",
-        "국장 신청 안 됐어",
-        "장학금 조건이 뭐야",
-        "등록금 장학금으로 충당돼",
-        "장학금 중복 수혜 가능해",
-        # 수강신청 관련
-        "수강신청 몇 시부터야",
-        "강의 꽉 찼는데 어떡해",
-        "수강 변경 기간이 언제야",
-        "전공필수 빠졌어 어떡해",
-        "수강신청 오류 났어",
-        "시간표 어디서 봐",
-        "재수강 학점 제한 있어",
-        "수강 취소하면 환불돼",
-        "학점 몇 개까지 들을 수 있어",
-        "수강신청 대기 어떻게 해",
-        "강의 시간 겹쳐도 돼",
-        "전공 수강신청 따로야",
-        "수강신청 시스템 안 열려",
-        "강의계획서 어디서 봐",
-        "수업 결석 몇 번까지 돼",
-        # 대동제 관련
-        "대동제 날짜가 언제야",
-        "대동제 외부인 입장 돼",
-        "대동제 공연 라인업이 뭐야",
-        "대동제 어디서 해",
-        "대동제 입장료 있어",
-        "대동제 음식 있어",
-        "대동제 학생증 필요해",
-        "대동제 주차 가능해",
-        "대동제 비오면 취소야",
-        "대동제 며칠 동안 해",
-        "대동제 몇 시에 끝나",
-        "대동제 티켓 어디서 사",
-        # 휴학/복학 관련
-        "휴학하면 등록금 돌려줘",
-        "휴학 기간 최대 몇 년",
-        "군휴학 신청 어떻게 해",
-        "복학하면 수강신청 새로 해야 해",
-        "휴학 중에 도서관 이용 돼",
-        "육아휴학 신청 방법",
-        "휴학하면 장학금 어떻게 돼",
-        "복학 날짜가 언제야",
-        "휴학 신청 기간 언제야",
-        "휴학 중에 학교 올 수 있어",
-        # 학사정보 관련
-        "졸업 학점 몇 학점이야",
-        "학사경고 몇 번이면 제적이야",
-        "성적 이의신청 기간 언제야",
-        "복수전공 신청 어떻게 해",
-        "전과하고 싶은데",
-        "졸업논문 언제 써야 해",
-        "학점 포기 가능해",
-        "교환학생 신청 어떻게 해",
-        "부전공 신청 기간 언제야",
-        "졸업 요건이 뭐야",
-        "성적 열람 언제부터야",
-        "학사경고 받으면 어떻게 돼",
+
+def normalize_for_embedding(text: str) -> str:
+    text = _URL_RE.sub(" ", text)
+    text = _JAMO_RE.sub(" ", text)
+    return _WS_RE.sub(" ", text).strip()
+
+
+# 한국어에서 토픽 키워드로 의미 없는 일반 명사
+NOUN_STOPWORDS = {
+    "것", "거", "수", "때", "곳", "분", "게", "걸", "건",
+    "년", "월", "일", "시", "번", "쪽", "중", "내",
+    "정도", "경우", "관련", "이상", "이하", "이후", "이전",
+}
+
+_okt = Okt()
+
+
+def korean_noun_tokenizer(text: str) -> List[str]:
+    return [
+        n for n in _okt.nouns(text)
+        if len(n) > 1 and n not in NOUN_STOPWORDS
     ]
 
 # =====================
-# 5. 불용어 처리
-# 의미없는 줄임말만 제거
-# =====================
-stopwords = [
-    "ㅎㅇ", "ㅋㅋ", "ㅠㅠ", "ㄱㅅ",
-    "ㅇㅇ", "ㄴㄴ", "ㅎㅎ", "ㅜㅜ",
-    "ㄷㄷ", "ㅂㅂ", "ㅈㅅ", "ㄱㄱ",
-]
-
-def remove_stopwords(text):
-    """불용어 제거 함수"""
-    for word in stopwords:
-        text = text.replace(word, "")
-    return text.strip()
-
-# =====================
-# 6. 모델 설정
+# 5. 모델 설정
 # =====================
 embedding_model = SentenceTransformer('jhgan/ko-sroberta-sts')
 
@@ -184,13 +127,47 @@ hdbscan_model = HDBSCAN(
     prediction_data=True
 )
 
-topic_model = BERTopic(
-    embedding_model=embedding_model,
-    umap_model=umap_model,
-    hdbscan_model=hdbscan_model,
-    nr_topics=5,
-    language="korean"
+vectorizer_model = CountVectorizer(
+    tokenizer=korean_noun_tokenizer,
+    min_df=2,
+    ngram_range=(1, 2),
 )
+
+
+def build_topic_model() -> BERTopic:
+    return BERTopic(
+        embedding_model=embedding_model,
+        umap_model=umap_model,
+        hdbscan_model=hdbscan_model,
+        vectorizer_model=vectorizer_model,
+        nr_topics=5,
+        language="korean",
+    )
+
+
+# =====================
+# 6. 체크포인트 입출력
+# =====================
+def save_checkpoint(model: BERTopic, qs: List[str], tps: List[int]) -> None:
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    model.save(
+        str(TOPIC_MODEL_PATH),
+        serialization="safetensors",
+        save_ctfidf=True,
+        save_embedding_model=False,
+    )
+    joblib.dump({"questions": qs, "topics": tps}, METADATA_PATH)
+    print(f"체크포인트 저장 완료: 질문 {len(qs)}개")
+
+
+def load_checkpoint():
+    if not TOPIC_MODEL_PATH.exists() or not METADATA_PATH.exists():
+        return None
+    model = BERTopic.load(str(TOPIC_MODEL_PATH), embedding_model=embedding_model)
+    meta = joblib.load(METADATA_PATH)
+    print(f"체크포인트 로드 완료: 질문 {len(meta['questions'])}개")
+    return model, meta["questions"], meta["topics"]
+
 
 # =====================
 # 7. 클러스터링 함수
@@ -198,22 +175,43 @@ topic_model = BERTopic(
 # =====================
 def run_clustering():
     """매일 자정에 자동으로 호출됨"""
-    global questions, topics, probs, cleaned_questions
+    global questions, topics, topic_model
 
     print(f"클러스터링 실행 중... {datetime.now()}")
 
     new_questions = get_questions_from_db()
-    if new_questions:
-        questions = new_questions
+    if not new_questions:
+        print("DB에서 질문을 가져오지 못해 클러스터링을 건너뜁니다")
+        return
 
-    cleaned_questions = [remove_stopwords(q) for q in questions]
-    topics, probs = topic_model.fit_transform(cleaned_questions)
+    fresh_model = build_topic_model()
+    cleaned = [normalize_for_embedding(q) for q in new_questions]
+    new_topics, _ = fresh_model.fit_transform(cleaned)
 
+    topic_model = fresh_model
+    questions = new_questions
+    topics = list(new_topics)
+
+    save_checkpoint(topic_model, questions, topics)
     print(f"클러스터링 완료! {datetime.now()}")
 
-# 서버 시작할 때 첫 번째 실행
-cleaned_questions = [remove_stopwords(q) for q in questions]
-topics, probs = topic_model.fit_transform(cleaned_questions)
+
+# 서버 시작 시 초기화: 체크포인트 우선, 없으면 새로 학습
+_checkpoint = load_checkpoint()
+if _checkpoint is not None:
+    topic_model, questions, topics = _checkpoint
+else:
+    questions = get_questions_from_db()
+    if not questions:
+        raise RuntimeError(
+            "DB에서 질문을 가져올 수 없고 체크포인트도 없습니다. "
+            "DB 연결을 확인하거나 체크포인트를 먼저 생성하세요."
+        )
+    topic_model = build_topic_model()
+    _cleaned = [normalize_for_embedding(q) for q in questions]
+    topics, _ = topic_model.fit_transform(_cleaned)
+    topics = list(topics)
+    save_checkpoint(topic_model, questions, topics)
 
 # =====================
 # 8. 자동 실행 스케줄러
@@ -277,7 +275,7 @@ class NextActionRequest(BaseModel):
 @app.post("/api/next-actions")
 def get_next_actions(request: NextActionRequest):
     """연관 질문 3개 반환"""
-    cleaned_query = remove_stopwords(request.query)
+    cleaned_query = normalize_for_embedding(request.query)
 
     query_topic, _ = topic_model.transform([cleaned_query])
     topic_num = query_topic[0]
