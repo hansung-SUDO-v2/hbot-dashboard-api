@@ -9,7 +9,10 @@ from hdbscan import HDBSCAN
 from datetime import datetime, date
 from pydantic import BaseModel
 from typing import List
+from pathlib import Path
+import os
 import psycopg2
+from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # =====================
@@ -17,26 +20,44 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # =====================
 app = FastAPI()
 
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "rag.soay-quail.ts.net"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "database": os.getenv("DB_NAME", "hansung_agent_rag"),
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", "1234"),
+}
+
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
+APP_PORT = int(os.getenv("APP_PORT", "8010"))
+
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
+
 # =====================
 # 3. DB에서 질문 가져오기
 # 실패하면 가짜 데이터 사용
 # =====================
 def get_questions_from_db():
     """
-    DB question_logs 테이블에서
-    학생 질문들을 가져오는 함수
+    DB chat_message 테이블에서
+    USER 질문만 가져오는 함수
     실패하면 빈 리스트 반환
     """
     try:
-        conn = psycopg2.connect(
-            host="localhost",
-            port=5432,
-            database="hansung_agent_rag",
-            user="postgres",
-            password="1234"
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT query_text FROM question_logs")
+        cursor.execute("""
+            SELECT convert_from(lo_get(content), 'UTF8') AS query_text
+            FROM chat_message
+            WHERE sender_type = 'USER'
+              AND content IS NOT NULL
+            ORDER BY created_at ASC
+        """)
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -286,36 +307,33 @@ def get_stats(period: str = "daily"):
     period: daily(일간), weekly(주간), monthly(월별)
     """
     try:
-        conn = psycopg2.connect(
-            host="localhost",
-            port=5432,
-            database="hansung_agent_rag",
-            user="postgres",
-            password="1234"
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
 
         if period == "daily":
             cursor.execute("""
                 SELECT DATE(created_at), COUNT(*)
-                FROM question_logs
-                WHERE created_at >= NOW() - INTERVAL '1 day'
+                FROM chat_message
+                WHERE sender_type = 'USER'
+                  AND created_at >= NOW() - INTERVAL '1 day'
                 GROUP BY DATE(created_at)
                 ORDER BY DATE(created_at)
             """)
         elif period == "weekly":
             cursor.execute("""
                 SELECT DATE(created_at), COUNT(*)
-                FROM question_logs
-                WHERE created_at >= NOW() - INTERVAL '7 days'
+                FROM chat_message
+                WHERE sender_type = 'USER'
+                  AND created_at >= NOW() - INTERVAL '7 days'
                 GROUP BY DATE(created_at)
                 ORDER BY DATE(created_at)
             """)
         elif period == "monthly":
             cursor.execute("""
                 SELECT DATE(created_at), COUNT(*)
-                FROM question_logs
-                WHERE created_at >= NOW() - INTERVAL '30 days'
+                FROM chat_message
+                WHERE sender_type = 'USER'
+                  AND created_at >= NOW() - INTERVAL '30 days'
                 GROUP BY DATE(created_at)
                 ORDER BY DATE(created_at)
             """)
@@ -328,9 +346,9 @@ def get_stats(period: str = "daily"):
 
     except Exception as e:
         result = [
-            {"date": "2026-05-14", "count": 23},
-            {"date": "2026-05-15", "count": 31},
-            {"date": "2026-05-16", "count": 27},
+            {"date": "2026-05-14", "count": -1},
+            {"date": "2026-05-15", "count": -1},
+            {"date": "2026-05-16", "count": -1},
         ]
 
     return {
@@ -346,18 +364,13 @@ def get_stats(period: str = "daily"):
 def get_hourly_stats():
     """시간대별 질문 수 반환"""
     try:
-        conn = psycopg2.connect(
-            host="localhost",
-            port=5432,
-            database="hansung_agent_rag",
-            user="postgres",
-            password="1234"
-        )
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT EXTRACT(HOUR FROM created_at), COUNT(*)
-            FROM question_logs
-            WHERE created_at >= NOW() - INTERVAL '7 days'
+            FROM chat_message
+            WHERE sender_type = 'USER'
+              AND created_at >= NOW() - INTERVAL '7 days'
             GROUP BY EXTRACT(HOUR FROM created_at)
             ORDER BY EXTRACT(HOUR FROM created_at)
         """)
@@ -369,11 +382,11 @@ def get_hourly_stats():
 
     except Exception as e:
         result = [
-            {"hour": 9, "count": 23},
-            {"hour": 12, "count": 45},
-            {"hour": 15, "count": 31},
-            {"hour": 18, "count": 38},
-            {"hour": 21, "count": 19},
+            {"hour": -1, "count": -1},
+            {"hour": -1, "count": -1},
+            {"hour": -1, "count": -1},
+            {"hour": -1, "count": -1},
+            {"hour": -1, "count": -1},
         ]
 
     return {"data": result}
@@ -409,3 +422,9 @@ def get_distribution():
         "total": total,
         "data": result
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=True)

@@ -50,10 +50,16 @@ pip install psycopg2-binary apscheduler
 pip install umap-learn hdbscan
 
 ### 2. 서버 실행
-uvicorn main:app --reload
+`.env`를 자동으로 읽습니다.
+
+python main.py
+
+또는
+uvicorn main:app --reload --host 0.0.0.0 --port 8010
 
 ### 3. API 확인
-http://127.0.0.1:8000/docs
+- 로컬: http://127.0.0.1:8010/docs
+- Tailscale/LAN: http://<arm-ip>:8010/docs
 
 ---
 
@@ -96,7 +102,8 @@ TOP5 + 키워드 5개 반환
 
 ## DB 연동
 - DB: PostgreSQL
-- 테이블: question_logs
+- 실제 질문 테이블: `chat_message` (`sender_type='USER'` 기준)
+- 질문 본문: `convert_from(lo_get(content), 'UTF8')`
 - 연결 실패시 가짜 데이터로 자동 대체
 
 ---
