@@ -173,3 +173,41 @@ def get_distribution():
         })
 
     return {"total": total, "data": result}
+
+
+@router.get("/api/debug/keywords")
+def get_all_keywords():
+    """디버그용: 학습된 전체 토픽의 키워드 풀세트와 샘플 질문을 덤프한다.
+
+    - outlier 토픽(-1) 포함
+    - keywords는 BERTopic.get_topic()의 모든 단어 (trending보다 풍부)
+    - sample_questions는 학습 시점 questions/topics 매핑에서 직접 추출
+    """
+    topic_info = state.topic_model.get_topic_info()
+
+    topics_payload = []
+    for _, row in topic_info.iterrows():
+        topic_id = int(row["Topic"])
+
+        terms = state.topic_model.get_topic(topic_id) or []
+        keywords = [w for w, _ in terms if w]
+
+        samples = [
+            state.questions[i]
+            for i, t in enumerate(state.topics)
+            if t == topic_id
+        ][:5]
+
+        topics_payload.append({
+            "topic_id": topic_id,
+            "label": row["Name"],
+            "count": int(row["Count"]),
+            "keywords": keywords,
+            "sample_questions": samples,
+        })
+
+    return {
+        "total_questions": len(state.questions),
+        "topics": topics_payload,
+        "updated_at": datetime.now().isoformat(),
+    }
