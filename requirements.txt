@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+pydantic
+python-dotenv
+
+bertopic
+sentence-transformers
+umap-learn
+hdbscan
+scikit-learn
+
+konlpy
+JPype1
+
+psycopg2-binary
+apscheduler
+joblib
