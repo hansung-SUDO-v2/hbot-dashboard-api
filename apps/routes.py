@@ -22,12 +22,19 @@ def get_trending():
         if row["Topic"] == -1:
             continue
 
-        example = row["Representative_Docs"][0] if row["Representative_Docs"] else ""
+        # nr_topics 축소로 merged된 토픽은 Representative_Docs / Representation이
+        # NaN(float)으로 들어오는 경우가 있어 list 여부를 가드한다.
+        docs = row["Representative_Docs"]
+        example = docs[0] if isinstance(docs, (list, tuple)) and len(docs) > 0 else ""
+
+        repr_kw = row["Representation"]
+        keywords = list(repr_kw[:5]) if isinstance(repr_kw, (list, tuple)) else []
+
         result.append({
             "rank": rank,
             "label": row["Name"],
             "example_query": example,
-            "keywords": row["Representation"][:5],
+            "keywords": keywords,
             "count": row["Count"],
         })
         rank += 1
