@@ -11,6 +11,21 @@ from apps.state import state
 router = APIRouter()
 
 
+def _first_question_in_topic(topic_id: int) -> str:
+    """학습 시점 questions/topics 매핑에서 해당 토픽의 첫 질문을 돌려준다."""
+    for q, t in zip(state.questions, state.topics):
+        if t == topic_id and q:
+            return q
+    return ""
+
+
+def _clean_keywords(repr_kw, limit: int) -> list:
+    """BERTopic Representation에서 빈 문자열을 걸러내 상위 N개."""
+    if not isinstance(repr_kw, (list, tuple)):
+        return []
+    return [w for w in repr_kw if w][:limit]
+
+
 @router.get("/api/trending")
 def get_trending():
     """핫토픽 TOP5 반환"""
@@ -19,16 +34,18 @@ def get_trending():
     result = []
     rank = 1
     for _, row in topic_info.iterrows():
-        if row["Topic"] == -1:
+        topic_id = int(row["Topic"])
+        if topic_id == -1:
             continue
 
         # nr_topics 축소로 merged된 토픽은 Representative_Docs / Representation이
         # NaN(float)으로 들어오는 경우가 있어 list 여부를 가드한다.
         docs = row["Representative_Docs"]
         example = docs[0] if isinstance(docs, (list, tuple)) and len(docs) > 0 else ""
+        if not example:
+            example = _first_question_in_topic(topic_id)
 
-        repr_kw = row["Representation"]
-        keywords = list(repr_kw[:5]) if isinstance(repr_kw, (list, tuple)) else []
+        keywords = _clean_keywords(row["Representation"], 5)
 
         result.append({
             "rank": rank,
@@ -190,7 +207,7 @@ def get_all_keywords():
         topic_id = int(row["Topic"])
 
         terms = state.topic_model.get_topic(topic_id) or []
-        keywords = [w for w, _ in terms if w]
+        keywords = [w for w, _ in terms if w] if isinstance(terms, (list, tuple)) else []
 
         samples = [
             state.questions[i]
