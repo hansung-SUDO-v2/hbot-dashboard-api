@@ -50,10 +50,16 @@ pip install psycopg2-binary apscheduler
 pip install umap-learn hdbscan
 
 ### 2. 서버 실행
-uvicorn main:app --reload
+`.env`를 자동으로 읽습니다.
+
+python main.py
+
+또는
+uvicorn main:app --reload --host 0.0.0.0 --port 8010
 
 ### 3. API 확인
-http://127.0.0.1:8000/docs
+- 로컬: http://127.0.0.1:8010/docs
+- Tailscale/LAN: http://<arm-ip>:8010/docs
 
 ---
 

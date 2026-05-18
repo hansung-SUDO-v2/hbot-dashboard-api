@@ -9,14 +9,19 @@ from hdbscan import HDBSCAN
 from datetime import datetime, date
 from pydantic import BaseModel
 from typing import List
+from pathlib import Path
 import os
 import psycopg2
+from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # =====================
 # 2. FastAPI 서버 시작
 # =====================
 app = FastAPI()
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "rag.soay-quail.ts.net"),
@@ -25,6 +30,9 @@ DB_CONFIG = {
     "user": os.getenv("DB_USER", "postgres"),
     "password": os.getenv("DB_PASSWORD", "1234"),
 }
+
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
+APP_PORT = int(os.getenv("APP_PORT", "8010"))
 
 
 def get_db_connection():
@@ -414,3 +422,9 @@ def get_distribution():
         "total": total,
         "data": result
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=True)
